@@ -42,34 +42,19 @@
 
 ---
 
-## 3. 真实示例（本 skill 来源）
+## 3. 示例结构
 
-**用户输入（自然语言，很碎）：**
-> 鸿蒙，文件侧边栏 copilot，@知识库 之后按住说话能触发语音，不应该。安卓 ios 怎么做的？
+用户输入通常是碎片化的自然语言，需要补全成结构化的缺陷简报。
 
-**补全后的简报：**
-```
-- 平台/端：        harmony（参考 android/ios）
-- 受影响模块：      inputfield / CopilotInputView（检索反推）
-- 复现步骤：        @知识库 → 长按输入框
-- 实际现象：        进入语音输入模式
-- 预期行为：        @知识库 后不应进入语音
-- 失败信号：        长按守卫判空失效，语音被误触发
-- 证据索引：        BaseTextArea.ets 长按守卫；CopilotLogic.ets 按钮状态
-```
+**补全要点：**
+- 从输入中抽取平台、模块、复现步骤、实际现象、预期行为、失败信号
+- 缺失字段标 `?`，只在「复现步骤」和「预期行为」缺失时才问用户
+- 一次最多问 2 个问题，且必须给出默认假设
 
-**三类查询：**
-- A 代码：`Grep "enableLongPressToAudioInput" "userInputSpans" "getSpans"`
-- B 文档：无 CONTEXT.md，读相关 .ets
-- C 跨端：`Grep android "isVoiceInputEnabled" "atKnowledgeBases.isEmpty()"`；
-  `Grep ios "disableDirectPressForVoice" "length > 0"`
-
-**跨端参考结论（关键）：**
-- Android：`isVoiceInputEnabled()` 直接判 `atKnowledgeBases.isEmpty()`
-- iOS：`disableDirectPressForVoice()` 判 `inputText.length > 0`（富文本附件也算长度）
-
-→ 鸿蒙的守卫只看 `userInputSpans.length`，而 @知识库 用的是 BuilderSpan，`getSpans()`
-取不到它，导致判空失效。根因锁定。
+**三类查询要点：**
+- 代码检索：从报错符号或功能名出发
+- 文档检索：拿架构心智模型
+- 跨端参考：找「同类守卫」的判断逻辑
 
 ---
 
@@ -77,7 +62,7 @@
 
 ```
 为推进修复我需要确认两点（我的默认假设附后）：
-1. 复现步骤是否是「@知识库 → 长按输入框」？默认：是。
-2. 预期是否「@知识库 后任何情况都不进语音」？默认：是。
+1. 复现步骤是否是「<具体操作>」？默认：是。
+2. 预期是否「<期望结果>」？默认：是。
 如假设不对请直接改，否则我就按默认推进。
 ```

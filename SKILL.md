@@ -53,8 +53,7 @@ agent_created: true
    首项应是「报错里的关键符号」或「用户点名的功能」。
 2. **文档检索**：读仓库里的 `CONTEXT.md`、ADR、相关 `docs/`（若该仓库有），拿架构心智模型。
 3. **跨端参考**：同一功能在别的端怎么实现？搜对应端目录（如 android/、ios/），
-   这正是定位「不该这么走」的关键参照——本 skill 源自一个真实 bug：鸿蒙端在 @知识库 后
-   误触发长按语音，而 android/ios 早就用 `isEmpty()` / `length>0` 守住了。
+   这正是定位「不该这么走」的关键参照。
 
 检索完，把命中的关键文件、行号、相关代码片段收进简报的「证据索引」。
 
@@ -130,8 +129,3 @@ agent_created: true
 - codebase-design 保证「改对地方」，避免补丁叠补丁、往基类乱塞字段。
 - ponytail 保证「改得最小」，杜绝过度工程。
 - review 保证「改得对、改得合规」，闭环收口。
-
-真实示例（本 skill 的来源）：鸿蒙文件侧边栏 Copilot，@知识库 后长按输入误触发语音。
-根因是 @知识库 用的是 BuilderSpan，`getSpans()` 取不到它，导致长按守卫的 span 判空失效。
-修复落点是基类留 `isLongPressDisabled()` 钩子、子类用已有的 `curKnowledgeMap.size>0` 覆写，
-三个文件的最小改动，未动基类字段。
