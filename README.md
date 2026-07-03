@@ -1,6 +1,6 @@
 # fix_bug
 
-端到端修 bug 的链路式 WorkBuddy skill。用户甩来一段碎碎念（缺陷单、群里一句话、复现步骤缺失），直接去翻代码很容易跑偏。这个 skill 的做法是先把它补全，再沿链路推进，一次性完成从定位到修复的全流程。
+端到端修 bug 的链路式 skill。用户甩来一段碎碎念（缺陷单、群里一句话、复现步骤缺失），直接去翻代码很容易跑偏。这个 skill 的做法是先把它补全，再沿链路推进，一次性完成从定位到修复的全流程。
 
 ## 链路
 
@@ -74,11 +74,44 @@
 
 ## 安装
 
-把整个 fix_bug 目录复制到 `~/.workbuddy/skills/fix_bug/`，重启 WorkBuddy 即可。
+把整个 fix_bug 目录复制到 WorkBuddy 的 skills 目录当中即可
 
 ## 触发方式
 
 在 WorkBuddy 对话中说「修 bug」「定位这个缺陷」「排查这个问题」或直接贴一段缺陷描述即可触发。
+
+## 补充 Skill：fix_bug_device_verify
+
+本仓库还包含一个补充 skill —— **真机校验收官**，位于 `fix_bug_device_verify/` 目录下。
+
+它的作用是：fix_bug 完成修复后，自动读取修复产物，优先连接真机（hdc/adb/idevice_id），
+构建安装、执行反馈环、抓取运行时日志，判定修复是否成功。真机不可用时自动回落模拟器。
+
+与此同时，仓库根目录的 `fix_bug_validator.py` 是配套的 GUI 校验面板，
+提供可视化的链路验证 + 真机校验流程。
+
+完整工作流：
+
+```
+fix_bug 修复完成
+    ↓
+fix_bug_device_verify 读取产物
+    ↓
+真机优先 / 模拟器回落
+    ↓
+抓日志 → 三条件判定 → FIXED / NOT_FIXED / INCONCLUSIVE
+```
+
+安装：
+
+```bash
+# fix_bug 主 skill
+cp -r fix_bug/ ~/.workbuddy/skills/fix_bug/
+# 补充：真机校验收官
+cp -r fix_bug/fix_bug_device_verify/ ~/.workbuddy/skills/fix_bug_device_verify/
+```
+
+触发方式：「上真机验证」「校验修复」「跑一下看修没修好」。
 
 ---
 
