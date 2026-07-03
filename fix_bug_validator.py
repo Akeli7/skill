@@ -762,7 +762,7 @@ class FixBugValidatorApp:
     def _build_ui(self):
         # 顶部标题栏
         header = tk.Frame(self.root, bg=self.colors["primary"], height=56)
-        header.pack(fill=tk.X)
+        header.pack(fill=tk.X, side=tk.TOP)
         header.pack_propagate(False)
         tk.Label(header, text="fix_bug 链路验证面板（真机版）",
                 fg="white", bg=self.colors["primary"],
@@ -773,6 +773,7 @@ class FixBugValidatorApp:
             font=("SF Pro Display", 12))
         self.status_indicator.pack(side=tk.RIGHT, padx=24, pady=12)
 
+        # 主内容：左 + 右
         main = tk.Frame(self.root, bg=self.colors["bg"])
         main.pack(fill=tk.BOTH, expand=True, padx=20, pady=16)
 
@@ -780,40 +781,49 @@ class FixBugValidatorApp:
         left_panel = tk.Frame(main, bg=self.colors["bg"])
         left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # 输入卡片
-        input_card = self._make_card(left_panel, "设备信息 & Fix Bug 桥接")
-        input_card.pack(fill=tk.X, pady=(0, 12))
+        # 输入卡片 - 用 grid 布局，每行单独 pack
+        input_card = tk.Frame(left_panel, bg=self.colors["card"], bd=1,
+                              relief="solid", highlightthickness=0)
+        input_card.pack(fill=tk.X, pady=(0, 12), ipady=8)
+        # 标题
+        tk.Label(input_card, text="设备信息 & Fix Bug 桥接", bg=self.colors["card"],
+                fg=self.colors["text"], font=("SF Pro Display", 12, "bold"),
+                anchor=tk.W).pack(fill=tk.X, padx=16, pady=(12, 6))
 
         # 序列号
         tk.Label(input_card, text="序列号 / 设备 ID", bg=self.colors["card"],
-                fg=self.colors["text"], font=("SF Pro Display", 11)).pack(
-                    anchor=tk.W, pady=(0, 4))
+                fg=self.colors["text"], font=("SF Pro Display", 11),
+                anchor=tk.W).pack(fill=tk.X, padx=16, pady=(4, 2))
         self.serial_entry = tk.Entry(input_card, font=("SF Mono", 13),
-                                    relief="solid", borderwidth=1, highlightthickness=0)
-        self.serial_entry.pack(fill=tk.X, pady=(0, 10))
+                                    relief="solid", borderwidth=1, highlightthickness=1,
+                                    highlightbackground=self.colors["border"],
+                                    highlightcolor=self.colors["primary"])
+        self.serial_entry.pack(fill=tk.X, padx=16, pady=(0, 8), ipady=6)
         self.serial_entry.insert(0, "e.g., 20240615A001")
 
         # 客户端类型
         tk.Label(input_card, text="客户端类型", bg=self.colors["card"],
-                fg=self.colors["text"], font=("SF Pro Display", 11)).pack(
-                    anchor=tk.W, pady=(0, 4))
+                fg=self.colors["text"], font=("SF Pro Display", 11),
+                anchor=tk.W).pack(fill=tk.X, padx=16, pady=(4, 2))
         type_frame = tk.Frame(input_card, bg=self.colors["card"])
-        type_frame.pack(fill=tk.X, pady=(0, 10))
+        type_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
         self.client_var = tk.StringVar(value="HarmonyOS")
-        style = ttk.Style()
-        style.configure("Type.TRadiobutton", background=self.colors["card"],
-                       font=("SF Pro Display", 11))
         for ct in ClientType:
-            ttk.Radiobutton(type_frame, text=ct.value,
-                           variable=self.client_var, value=ct.value,
-                           style="Type.TRadiobutton").pack(side=tk.LEFT, padx=(0, 16))
+            rb = tk.Radiobutton(type_frame, text=ct.value, variable=self.client_var,
+                               value=ct.value, bg=self.colors["card"],
+                               fg=self.colors["text"], font=("SF Pro Display", 11),
+                               selectcolor=self.colors["card"],
+                               activebackground=self.colors["card"],
+                               cursor="hand2")
+            rb.pack(side=tk.LEFT, padx=(0, 20))
 
         # 自动探测进程
         self.detect_frame = tk.Frame(input_card, bg=self.colors["card"])
-        self.detect_frame.pack(fill=tk.X, pady=(8, 10))
-        self.detect_btn = self._make_button(
-            self.detect_frame, "📱 自动探测 App 进程", self.colors["success"],
-            self._auto_detect_process)
+        self.detect_frame.pack(fill=tk.X, padx=16, pady=(8, 6))
+        self.detect_btn = tk.Button(
+            self.detect_frame, text="📱 自动探测 App 进程", command=self._auto_detect_process,
+            font=("SF Pro Display", 11, "bold"), bg=self.colors["success"],
+            fg="white", bd=0, relief="flat", cursor="hand2", padx=16, pady=8)
         self.detect_btn.pack(side=tk.LEFT)
         self.process_status = tk.Label(
             self.detect_frame, text="", bg=self.colors["card"],
@@ -822,33 +832,38 @@ class FixBugValidatorApp:
 
         # fix_bug 产物状态
         self.bridge_status = tk.Label(input_card, text="", bg=self.colors["card"],
-                                     font=("SF Pro Display", 10))
-        self.bridge_status.pack(anchor=tk.W, pady=(0, 8))
+                                     font=("SF Pro Display", 10), anchor=tk.W)
+        self.bridge_status.pack(fill=tk.X, padx=16, pady=(4, 8))
         self._check_bridge_files()
 
         # 按钮栏
         btn_frame = tk.Frame(input_card, bg=self.colors["card"])
-        btn_frame.pack(fill=tk.X, pady=(4, 0))
-
-        self.validate_btn = self._make_button(
-            btn_frame, "▶ 开始验证（含真机校验）", self.colors["primary"],
-            self._start_validation)
-        self.validate_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-
-        self.export_test_btn = self._make_button(
-            btn_frame, "📄 导出测试代码", self.colors["text_secondary"],
-            self._export_tests, outline=True)
-        self.export_test_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        self.export_report_btn = self._make_button(
-            btn_frame, "📊 导出报告", self.colors["text_secondary"],
-            self._export_report, outline=True)
-        self.export_report_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
+        btn_frame.pack(fill=tk.X, padx=16, pady=(4, 12))
+        self.validate_btn = tk.Button(
+            btn_frame, text="▶ 开始验证（含真机校验）", command=self._start_validation,
+            font=("SF Pro Display", 11, "bold"), bg=self.colors["primary"],
+            fg="white", bd=0, relief="flat", cursor="hand2", pady=8)
+        self.validate_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.export_test_btn = tk.Button(
+            btn_frame, text="📄 导出测试代码", command=self._export_tests,
+            font=("SF Pro Display", 11), bg=self.colors["card"],
+            fg=self.colors["text_secondary"], bd=1, relief="solid",
+            cursor="hand2", pady=8)
+        self.export_test_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
+        self.export_report_btn = tk.Button(
+            btn_frame, text="📊 导出报告", command=self._export_report,
+            font=("SF Pro Display", 11), bg=self.colors["card"],
+            fg=self.colors["text_secondary"], bd=1, relief="solid",
+            cursor="hand2", pady=8)
+        self.export_report_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
 
         # 阶段状态卡片
-        self.phase_card = self._make_card(left_panel, "阶段验证状态")
+        self.phase_card = tk.Frame(left_panel, bg=self.colors["card"], bd=1,
+                                   relief="solid", highlightthickness=0)
         self.phase_card.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
-
+        tk.Label(self.phase_card, text="阶段验证状态", bg=self.colors["card"],
+                fg=self.colors["text"], font=("SF Pro Display", 12, "bold"),
+                anchor=tk.W).pack(fill=tk.X, padx=16, pady=(12, 6))
         self.phase_tree = ttk.Treeview(
             self.phase_card,
             columns=("phase", "passed", "total", "rate", "status"),
@@ -859,8 +874,7 @@ class FixBugValidatorApp:
         self.phase_tree.heading("total", text="总数"); self.phase_tree.column("total", width=55, anchor="center")
         self.phase_tree.heading("rate", text="通过率"); self.phase_tree.column("rate", width=70, anchor="center")
         self.phase_tree.heading("status", text="状态"); self.phase_tree.column("status", width=70, anchor="center")
-        self.phase_tree.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
-
+        self.phase_tree.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
         phase_keys = list(PHASES.keys()) + ["PHASE_D"]
         phase_names = [PHASES[k]["name"] for k in PHASES] + ["真机校验收官"]
         for pk, pn in zip(phase_keys, phase_names):
@@ -879,21 +893,23 @@ class FixBugValidatorApp:
         right_panel = tk.Frame(main, bg=self.colors["bg"], width=400)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(16, 0))
         right_panel.pack_propagate(False)
-
-        log_card = self._make_card(right_panel, "验证日志")
+        log_card = tk.Frame(right_panel, bg=self.colors["card"], bd=1,
+                           relief="solid", highlightthickness=0)
         log_card.pack(fill=tk.BOTH, expand=True)
-
+        tk.Label(log_card, text="验证日志", bg=self.colors["card"],
+                fg=self.colors["text"], font=("SF Pro Display", 12, "bold"),
+                anchor=tk.W).pack(fill=tk.X, padx=16, pady=(12, 6))
         self.log_text = scrolledtext.ScrolledText(
             log_card, font=("SF Mono", 10), bg="#F8F9FA",
             fg=self.colors["text"], wrap=tk.WORD,
             relief="flat", borderwidth=0, padx=12, pady=12,
             state=tk.DISABLED)
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+        self.log_text.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 12))
         self._configure_log_tags()
 
         # 进度条
         self.progress = ttk.Progressbar(self.root, mode="determinate")
-        self.progress.pack(fill=tk.X, padx=20, pady=(8, 20))
+        self.progress.pack(fill=tk.X, padx=20, pady=(8, 20), side=tk.BOTTOM)
 
     def _check_bridge_files(self):
         """检测 fix_bug 产物是否存在"""
