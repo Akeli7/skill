@@ -273,7 +273,7 @@ class DeviceManager:
     """管理真机/模拟器探测、连接和命令执行"""
 
     def __init__(self, client_type: ClientType, serial: str,
-                 log_callback=None):
+                 log_callback=None, process_name=""):
         self.client_type = client_type
         self.serial = serial
         self.log = log_callback or (lambda msg, level: None)
@@ -281,7 +281,7 @@ class DeviceManager:
         self.mode: DeviceMode = DeviceMode.EMULATOR
         self.device_id: str = ""
         self.old_pid: str = ""
-        self.process_name: str = ""  # auto-detect 后填入
+        self.process_name: str = process_name  # auto-detect 后填入
 
     def _fmt_cmd(self, template: str, **extra) -> str:
         defaults = {
@@ -586,10 +586,11 @@ class DeviceManager:
 class PipelineValidator:
     """fix_bug 链路 + 设备校验收官"""
 
-    def __init__(self, serial: str, client_type: ClientType, log_callback=None):
+    def __init__(self, serial: str, client_type: ClientType, log_callback=None, process_name=""):
         self.serial = serial
         self.client_type = client_type
         self.log = log_callback or (lambda msg, level: None)
+        self.detected_process = process_name
         self.results = {}
         self.phase_checks = {k: {} for k in PHASES}
         self.device_result: Optional[VerifyResult] = None
@@ -619,7 +620,7 @@ class PipelineValidator:
 
         # Step 0: 设备检测
         self._log("")
-        device_mgr = DeviceManager(self.client_type, self.serial, self._log)
+        device_mgr = DeviceManager(self.client_type, self.serial, self._log, process_name=self.detected_process)
         device_mgr.detect()
 
         # 自动探测进程（真机模式下弹出提示）
@@ -754,6 +755,7 @@ class FixBugValidatorApp:
         self.validator_thread = None
         self.validation_running = False
         self.current_results = None
+        self.detected_process = ""  # auto-detect 结果
 
         self._build_ui()
 
@@ -979,6 +981,7 @@ class FixBugValidatorApp:
 
             # 探测
             name = dm.auto_detect_process()
+            self.detected_process = name if name else ""
             if name:
                 self.root.after(0, lambda: self.process_status.configure(
                     text=f"✓ 已探测: {name}", fg=self.colors["success"]))
@@ -1010,7 +1013,7 @@ class FixBugValidatorApp:
         self.status_indicator.configure(text="● 运行中", fg="#FFD666")
 
         self.validator_thread = threading.Thread(
-            target=self._run_validation, args=(serial, client_type), daemon=True)
+            target=self._run_validation, args=(serial, client_type, self.detected_process), daemon=True)
         self.validator_thread.start()
 
     def _clear_ui(self):
@@ -1023,8 +1026,8 @@ class FixBugValidatorApp:
         self.progress["value"] = 0
         self.current_results = None
 
-    def _run_validation(self, serial, client_type):
-        validator = PipelineValidator(serial, client_type, self._log)
+    def _run_validation(self, serial, client_type, process_name=""):
+        validator = PipelineValidator(serial, client_type, self._log, process_name)
         results = validator.validate()
         self.root.after(0, self._on_validation_done, results)
 
