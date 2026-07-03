@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, filedialog
 import json
 import os
+import platform
 import random
 import subprocess
 import time
