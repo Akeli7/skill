@@ -1196,6 +1196,21 @@ class FixBugValidatorApp:
             messagebox.showinfo("导出成功", f"已保存到:\n{fp}")
 
 
+def _detect_appearance():
+    """检测 macOS 系统外观，返回 True=暗色模式"""
+    if platform.system() != "Darwin":
+        return False
+    try:
+        r = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to get dark mode of appearance preferences'],
+            capture_output=True, text=True, timeout=5,
+        )
+        return "true" in r.stdout.strip().lower()
+    except Exception:
+        return False
+
+
 def main():
     is_dark = _detect_appearance()
     root = tk.Tk()
