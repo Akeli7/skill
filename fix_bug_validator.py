@@ -745,64 +745,28 @@ class FixBugValidatorApp:
         self.root.geometry("1060x820")
         self.root.minsize(950, 680)
 
-        # macOS 暗色模式强制走 Aqua 浅色
-        try:
-            self.root.tk.call("::tk::unsupported::MacWindowStyle",
-                               "appearance", "aqua")
-        except Exception:
-            pass
-        # ttk 强制 clam 主题（始终亮色，与系统暗色无关）
-        try:
-            _style = ttk.Style()
-            if "clam" in _style.theme_names():
-                _style.theme_use("clam")
-        except Exception:
-            pass
-
         self.colors = {
             "bg": "#F5F7FA", "card": "#FFFFFF", "primary": "#1677FF",
             "success": "#52C41A", "warning": "#FAAD14", "danger": "#FF4D4F",
             "text": "#1F1F1F", "text_secondary": "#8C8C8C", "border": "#E8E8E8",
         }
+        # 关键：tk_setPalette 设置全局调色板，比 configure(bg=) 更底层
+        # 这能控制所有 tk widget（包括 Radiobutton/Entry）的默认背景
+        try:
+            self.root.tk_setPalette(
+                background=self.colors["bg"],
+                foreground=self.colors["text"],
+                activeBackground=self.colors["primary"],
+                activeForeground="white",
+                selectColor=self.colors["card"],
+                selectBackground=self.colors["primary"],
+                selectForeground="white",
+                insertBackground=self.colors["text"],
+            )
+        except Exception:
+            pass
         self.root.configure(bg=self.colors["bg"])
 
-        # ttk 样式 - 统一 Label/Button 外观，绕开 macOS Aqua 下 tk.Label 渲染异常
-        self.ts = ttk.Style()
-        if "clam" in self.ts.theme_names():
-            self.ts.theme_use("clam")
-        # Header (深底白字)
-        self.ts.configure("Header.TLabel", font=("SF Pro Display", 16, "bold"),
-                          background="#1677FF", foreground="white")
-        self.ts.configure("HeaderStatus.TLabel", font=("SF Pro Display", 12),
-                          background="#1677FF", foreground="#A0D9FF")
-        # 卡片标题
-        self.ts.configure("CardTitle.TLabel", font=("SF Pro Display", 13, "bold"),
-                          background="#FFFFFF", foreground="#1F1F1F")
-        # 普通 Label
-        self.ts.configure("Field.TLabel", font=("SF Pro Display", 11),
-                          background="#FFFFFF", foreground="#1F1F1F")
-        # 副文本
-        self.ts.configure("Secondary.TLabel", font=("SF Pro Display", 10),
-                          background="#FFFFFF", foreground="#8C8C8C")
-        # 阶段状态/告警（白底）
-        self.ts.configure("Status.TLabel", font=("SF Pro Display", 11),
-                          background="#FFFFFF", foreground="#1F1F1F")
-        # 日志面板
-        self.ts.configure("Log.TLabel", font=("SF Pro Display", 12, "bold"),
-                          background="#F8F9FA", foreground="#1F1F1F")
-        # Primary 按钮
-        self.ts.configure("Primary.TButton", font=("SF Pro Display", 11, "bold"),
-                          background="#1677FF", foreground="white", padding=(16, 10))
-        self.ts.map("Primary.TButton",
-                    background=[("active", "#0958D9"), ("pressed", "#0958D9")])
-        # Success 按钮
-        self.ts.configure("Success.TButton", font=("SF Pro Display", 11, "bold"),
-                          background="#52C41A", foreground="white", padding=(20, 10))
-        self.ts.map("Success.TButton",
-                    background=[("active", "#389E0D"), ("pressed", "#389E0D")])
-        # Outline 按钮
-        self.ts.configure("Outline.TButton", font=("SF Pro Display", 11),
-                          background="#FFFFFF", foreground="#8C8C8C", padding=(8, 10))
 
         self.validator_thread = None
         self.validation_running = False
@@ -816,10 +780,13 @@ class FixBugValidatorApp:
         header = tk.Frame(self.root, bg=self.colors["primary"], height=56)
         header.pack(fill=tk.X, side=tk.TOP)
         header.pack_propagate(False)
-        ttk.Label(header, text="fix_bug 链路验证面板（真机版）",
-                   style="Header.TLabel").pack(side=tk.LEFT, padx=24, pady=12)
-        self.status_indicator = ttk.Label(header, text="● 就绪",
-                                          style="HeaderStatus.TLabel")
+        tk.Label(header, text="fix_bug 链路验证面板（真机版）",
+                  fg="white", bg=self.colors["primary"],
+                  font=("SF Pro Display", 16, "bold")).pack(
+                      side=tk.LEFT, padx=24, pady=12)
+        self.status_indicator = tk.Label(
+            header, text="● 就绪", fg="#A0D9FF", bg=self.colors["primary"],
+            font=("SF Pro Display", 12))
         self.status_indicator.pack(side=tk.RIGHT, padx=24, pady=12)
 
         # 主内容：左 + 右
@@ -837,14 +804,16 @@ class FixBugValidatorApp:
         input_card.pack(fill=tk.X, pady=(0, 12), ipady=4)
 
         # 标题
-        ttk.Label(input_card, text="● 设备信息 & Fix Bug 桥接",
-                  style="CardTitle.TLabel", anchor="w").pack(
-                      fill=tk.X, padx=12, pady=(12, 6))
+        tk.Label(input_card, text="● 设备信息 & Fix Bug 桥接",
+                 bg=self.colors["card"], fg=self.colors["text"],
+                 font=("SF Pro Display", 13, "bold"),
+                 anchor="w").pack(fill=tk.X, padx=12, pady=(12, 6))
 
         # 序列号 Label
-        ttk.Label(input_card, text="序列号 / 设备 ID:",
-                  style="Field.TLabel", anchor="w").pack(
-                      fill=tk.X, padx=16, pady=(4, 2))
+        tk.Label(input_card, text="序列号 / 设备 ID:",
+                 bg=self.colors["card"], fg=self.colors["text"],
+                 font=("SF Pro Display", 11),
+                 anchor="w").pack(fill=tk.X, padx=16, pady=(6, 2))
 
         # 序列号 Entry - 独立 Frame 强制高度
         entry_wrap = tk.Frame(input_card, bg="white",
@@ -859,9 +828,10 @@ class FixBugValidatorApp:
         self.serial_entry.insert(0, "e.g., 20240615A001")
 
         # 客户端类型 Label
-        ttk.Label(input_card, text="客户端类型:",
-                  style="Field.TLabel", anchor="w").pack(
-                      fill=tk.X, padx=16, pady=(4, 2))
+        tk.Label(input_card, text="客户端类型:",
+                 bg=self.colors["card"], fg=self.colors["text"],
+                 font=("SF Pro Display", 11),
+                 anchor="w").pack(fill=tk.X, padx=16, pady=(8, 2))
 
         # 客户端类型 Radiobutton
         type_frame = tk.Frame(input_card, bg=self.colors["card"])
@@ -878,42 +848,58 @@ class FixBugValidatorApp:
             rb.pack(side="left", padx=(0, 12))
 
         # 自动探测进程 - 标题
-        ttk.Label(input_card, text="目标进程探测:",
-                  style="Field.TLabel", anchor="w").pack(
-                      fill=tk.X, padx=16, pady=(4, 2))
+        tk.Label(input_card, text="目标进程探测:",
+                 bg=self.colors["card"], fg=self.colors["text"],
+                 font=("SF Pro Display", 11),
+                 anchor="w").pack(fill=tk.X, padx=16, pady=(8, 2))
 
         # 自动探测按钮 + 状态
         self.detect_frame = tk.Frame(input_card, bg=self.colors["card"])
         self.detect_frame.pack(fill=tk.X, padx=16, pady=(0, 8), ipady=4)
-        self.detect_btn = ttk.Button(
+        self.detect_btn = tk.Button(
             self.detect_frame, text="📱 自动探测 App 进程",
-            command=self._auto_detect_process, style="Success.TButton")
+            command=self._auto_detect_process,
+            font=("SF Pro Display", 12, "bold"),
+            bg=self.colors["success"], fg="white",
+            bd=0, relief="flat", cursor="hand2",
+            padx=20, pady=10, activebackground="#389E0D")
         self.detect_btn.pack(side="left")
-        self.process_status = ttk.Label(
-            self.detect_frame, text="", style="Secondary.TLabel")
+        self.process_status = tk.Label(
+            self.detect_frame, text="",
+            bg=self.colors["card"], fg=self.colors["text_secondary"],
+            font=("SF Pro Display", 11))
         self.process_status.pack(side="left", padx=(16, 0))
 
         # fix_bug 产物状态
-        self.bridge_status = ttk.Label(
-            input_card, text="", style="Secondary.TLabel",
-            anchor="w", wraplength=400, justify="left")
-        self.bridge_status.pack(fill=tk.X, padx=16, pady=(2, 8))
+        self.bridge_status = tk.Label(
+            input_card, text="",
+            bg=self.colors["card"], fg=self.colors["text_secondary"],
+            font=("SF Pro Display", 11), anchor="w",
+            wraplength=400, justify="left")
+        self.bridge_status.pack(fill=tk.X, padx=16, pady=(4, 8))
         self._check_bridge_files()
 
         # 按钮栏
         btn_frame = tk.Frame(input_card, bg=self.colors["card"])
         btn_frame.pack(fill=tk.X, padx=16, pady=(4, 12), ipady=4)
-        self.validate_btn = ttk.Button(
+        self.validate_btn = tk.Button(
             btn_frame, text="▶ 开始验证", command=self._start_validation,
-            style="Primary.TButton")
+            font=("SF Pro Display", 12, "bold"),
+            bg=self.colors["primary"], fg="white",
+            bd=0, relief="flat", cursor="hand2",
+            pady=10, activebackground="#0958D9")
         self.validate_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self.export_test_btn = ttk.Button(
+        self.export_test_btn = tk.Button(
             btn_frame, text="📄 测试代码", command=self._export_tests,
-            style="Outline.TButton")
+            font=("SF Pro Display", 11),
+            bg=self.colors["card"], fg=self.colors["text_secondary"],
+            bd=1, relief="solid", cursor="hand2", pady=10)
         self.export_test_btn.pack(side="left", fill="x", expand=True, padx=2)
-        self.export_report_btn = ttk.Button(
+        self.export_report_btn = tk.Button(
             btn_frame, text="📊 报告", command=self._export_report,
-            style="Outline.TButton")
+            font=("SF Pro Display", 11),
+            bg=self.colors["card"], fg=self.colors["text_secondary"],
+            bd=1, relief="solid", cursor="hand2", pady=10)
         self.export_report_btn.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         # ===== 阶段状态卡片 =====
@@ -921,9 +907,10 @@ class FixBugValidatorApp:
                                    highlightbackground=self.colors["border"],
                                    highlightthickness=1, bd=0)
         self.phase_card.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
-        ttk.Label(self.phase_card, text="● 阶段验证状态",
-                  style="CardTitle.TLabel", anchor="w").pack(
-                      fill=tk.X, padx=12, pady=(12, 6))
+        tk.Label(self.phase_card, text="● 阶段验证状态",
+                 bg=self.colors["card"], fg=self.colors["text"],
+                 font=("SF Pro Display", 13, "bold"),
+                 anchor="w").pack(fill=tk.X, padx=12, pady=(12, 6))
         self.phase_tree = ttk.Treeview(
             self.phase_card,
             columns=("phase", "passed", "total", "rate", "status"),
@@ -944,8 +931,10 @@ class FixBugValidatorApp:
         # 告警栏
         self.alert_frame = tk.Frame(left_panel, bg=self.colors["bg"])
         self.alert_frame.pack(fill=tk.X, pady=(8, 0))
-        self.alert_label = ttk.Label(self.alert_frame, text="",
-                                       style="Secondary.TLabel", anchor="w")
+        self.alert_label = tk.Label(
+            self.alert_frame, text="",
+            bg=self.colors["bg"], fg=self.colors["text_secondary"],
+            font=("SF Pro Display", 11), anchor="w")
         self.alert_label.pack(fill=tk.X, padx=4, pady=4)
 
         # ===== 右栏：日志面板 =====
@@ -956,9 +945,10 @@ class FixBugValidatorApp:
                            highlightbackground=self.colors["border"],
                            highlightthickness=1, bd=0)
         log_card.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(log_card, text="● 验证日志",
-                  style="CardTitle.TLabel", anchor="w").pack(
-                      fill=tk.X, padx=12, pady=(12, 6))
+        tk.Label(log_card, text="● 验证日志",
+                 bg=self.colors["card"], fg=self.colors["text"],
+                 font=("SF Pro Display", 13, "bold"),
+                 anchor="w").pack(fill=tk.X, padx=12, pady=(12, 6))
         self.log_text = scrolledtext.ScrolledText(
             log_card, font=("SF Mono", 10), bg="#F8F9FA",
             fg=self.colors["text"], wrap=tk.WORD,
@@ -977,16 +967,16 @@ class FixBugValidatorApp:
         fix = FixBugBridge.load_fix_result()
         if brief and fix:
             self.bridge_status.configure(
-                text="🔗 已检测到 fix_bug 产物（缺陷简报 + 修复方案）")
-            self.ts.configure("Secondary.TLabel", foreground=self.colors["success"])
+                text="🔗 已检测到 fix_bug 产物（缺陷简报 + 修复方案）",
+                fg=self.colors["success"])
         elif brief:
             self.bridge_status.configure(
-                text="⚠ 仅检测到缺陷简报，缺失修复方案")
-            self.ts.configure("Secondary.TLabel", foreground=self.colors["warning"])
+                text="⚠ 仅检测到缺陷简报，缺失修复方案",
+                fg=self.colors["warning"])
         else:
             self.bridge_status.configure(
-                text="未检测到 fix_bug 产物（将使用默认校验）")
-            self.ts.configure("Secondary.TLabel", foreground=self.colors["text_secondary"])
+                text="未检测到 fix_bug 产物（将使用默认校验）",
+                fg=self.colors["text_secondary"])
 
     def _make_card(self, parent, title):
         card = tk.Frame(parent, bg=self.colors["card"], bd=0,
@@ -1043,9 +1033,9 @@ class FixBugValidatorApp:
             # 先检测设备
             mode = dm.detect()
             if mode != DeviceMode.REAL:
-                self.ts.configure("Secondary.TLabel", foreground=self.colors["warning"])
                 self.root.after(0, lambda: self.process_status.configure(
-                    text="⚠ 真机不可用，已回落模拟器"))
+                    text="⚠ 真机不可用，已回落模拟器",
+                    fg=self.colors["warning"]))
                 self.root.after(0, lambda: self.detect_btn.configure(
                     text="📱 模拟器模式", state=tk.NORMAL))
                 return
@@ -1060,15 +1050,15 @@ class FixBugValidatorApp:
             name = dm.auto_detect_process()
             self.detected_process = name if name else ""
             if name:
-                self.ts.configure("Secondary.TLabel", foreground=self.colors["success"])
                 self.root.after(0, lambda: self.process_status.configure(
-                    text=f"✓ 已探测: {name}"))
+                    text=f"✓ 已探测: {name}",
+                    fg=self.colors["success"]))
                 self.root.after(0, lambda: self.detect_btn.configure(
                     text="📱 重新探测", state=tk.NORMAL))
             else:
-                self.ts.configure("Secondary.TLabel", foreground=self.colors["danger"])
                 self.root.after(0, lambda: self.process_status.configure(
-                    text="✗ 未检测到新进程，请确认 App 已启动"))
+                    text="✗ 未检测到新进程，请确认 App 已启动",
+                    fg=self.colors["danger"]))
                 self.root.after(0, lambda: self.detect_btn.configure(
                     text="📱 重试探测", state=tk.NORMAL))
 
@@ -1088,8 +1078,7 @@ class FixBugValidatorApp:
         self._clear_ui()
         self.validation_running = True
         self.validate_btn.configure(text="⏳ 验证中...", state=tk.DISABLED)
-        self.ts.configure("HeaderStatus.TLabel", foreground="#FFD666")
-        self.status_indicator.configure(text="● 运行中")
+        self.status_indicator.configure(text="● 运行中", fg="#FFD666")
 
         self.validator_thread = threading.Thread(
             target=self._run_validation, args=(serial, client_type, self.detected_process), daemon=True)
@@ -1118,22 +1107,20 @@ class FixBugValidatorApp:
 
         overall = results.get("overall_pass_rate", 0)
         if overall >= 80:
-            self.ts.configure("HeaderStatus.TLabel", foreground="#52C41A")
-            self.status_indicator.configure(text="✅ 通过")
+            self.status_indicator.configure(text="✅ 通过", fg="#52C41A")
         else:
-            self.ts.configure("HeaderStatus.TLabel", foreground="#FF4D4F")
-            self.status_indicator.configure(text="⚠️ 预警")
+            self.status_indicator.configure(text="⚠️ 预警", fg="#FF4D4F")
 
         self._update_phase_tree(results)
 
         if overall < 80:
-            self.ts.configure("Secondary.TLabel", foreground=self.colors["danger"])
             self.alert_label.configure(
-                text=f"⚠️ 预警: 总体通过率 {overall:.1f}% < 80% — 请检查修复链路!")
+                text=f"⚠️ 预警: 总体通过率 {overall:.1f}% < 80% — 请检查修复链路!",
+                fg=self.colors["danger"])
         else:
-            self.ts.configure("Secondary.TLabel", foreground=self.colors["success"])
             self.alert_label.configure(
-                text=f"✅ 总体通过率 {overall:.1f}% — 达标")
+                text=f"✅ 总体通过率 {overall:.1f}% — 达标",
+                fg=self.colors["success"])
 
     def _update_phase_tree(self, results):
         phase_checks = results.get("phase_checks", {})
@@ -1190,6 +1177,7 @@ class FixBugValidatorApp:
 
 
 def main():
+    _force_light_appearance()
     root = tk.Tk()
     FixBugValidatorApp(root)
     # macOS: 强制窗口置顶并获取焦点
