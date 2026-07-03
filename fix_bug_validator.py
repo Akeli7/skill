@@ -1110,10 +1110,11 @@ class FixBugValidatorApp:
 def main():
     root = tk.Tk()
     FixBugValidatorApp(root)
-    try:
-        root.tk.call("::tk::unsupported::MacWindowStyle", "appearance", "aqua", "lightAqua")
-    except Exception:
-        pass
+    # macOS: 强制窗口置顶并获取焦点
+    root.lift()
+    root.attributes('-topmost', True)
+    root.after(100, lambda: root.attributes('-topmost', False))
+    root.focus_force()
     root.mainloop()
 
 
