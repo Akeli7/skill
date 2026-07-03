@@ -739,19 +739,40 @@ class PipelineValidator:
 # ============================================================
 
 class FixBugValidatorApp:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, is_dark: bool = False):
         self.root = root
         self.root.title("fix_bug 链路验证面板（真机版）")
         self.root.geometry("1060x820")
         self.root.minsize(950, 680)
 
-        self.colors = {
-            "bg": "#F5F7FA", "card": "#FFFFFF", "primary": "#1677FF",
-            "success": "#52C41A", "warning": "#FAAD14", "danger": "#FF4D4F",
-            "text": "#1F1F1F", "text_secondary": "#8C8C8C", "border": "#E8E8E8",
-        }
-        # 关键：tk_setPalette 设置全局调色板，比 configure(bg=) 更底层
-        # 这能控制所有 tk widget（包括 Radiobutton/Entry）的默认背景
+        if is_dark:
+            self.colors = {
+                "bg": "#1E1E1E",
+                "card": "#2D2D2D",
+                "primary": "#5B9BD5",
+                "success": "#6BCB4B",
+                "warning": "#F5C542",
+                "danger": "#F06060",
+                "text": "#E0E0E0",
+                "text_secondary": "#999999",
+                "border": "#444444",
+                "input_bg": "#3D3D3D",
+                "log_bg": "#252525",
+            }
+        else:
+            self.colors = {
+                "bg": "#F5F7FA",
+                "card": "#FFFFFF",
+                "primary": "#1677FF",
+                "success": "#52C41A",
+                "warning": "#FAAD14",
+                "danger": "#FF4D4F",
+                "text": "#1F1F1F",
+                "text_secondary": "#8C8C8C",
+                "border": "#E8E8E8",
+                "input_bg": "#FFFFFF",
+                "log_bg": "#FEFEFE",
+            }
         try:
             self.root.tk_setPalette(
                 background=self.colors["bg"],
@@ -766,7 +787,6 @@ class FixBugValidatorApp:
         except Exception:
             pass
         self.root.configure(bg=self.colors["bg"])
-
 
         self.validator_thread = None
         self.validation_running = False
@@ -816,13 +836,13 @@ class FixBugValidatorApp:
                  anchor="w").pack(fill=tk.X, padx=16, pady=(6, 2))
 
         # 序列号 Entry - 独立 Frame 强制高度
-        entry_wrap = tk.Frame(input_card, bg="white",
+        entry_wrap = tk.Frame(input_card, bg=self.colors["input_bg"],
                               highlightbackground=self.colors["border"],
                               highlightthickness=1, bd=0)
         entry_wrap.pack(fill=tk.X, padx=16, pady=(0, 8), ipady=4)
         self.serial_entry = tk.Entry(
             entry_wrap, font=("SF Mono", 14), relief="flat", borderwidth=0,
-            highlightthickness=0, bg="white", fg=self.colors["text"],
+            highlightthickness=0, bg=self.colors["input_bg"], fg=self.colors["text"],
         )
         self.serial_entry.pack(fill=tk.X, padx=8, pady=8)
         self.serial_entry.insert(0, "e.g., 20240615A001")
@@ -950,7 +970,7 @@ class FixBugValidatorApp:
                  font=("SF Pro Display", 13, "bold"),
                  anchor="w").pack(fill=tk.X, padx=12, pady=(12, 6))
         self.log_text = scrolledtext.ScrolledText(
-            log_card, font=("SF Mono", 10), bg="#F8F9FA",
+            log_card, font=("SF Mono", 10), bg=self.colors["log_bg"],
             fg=self.colors["text"], wrap=tk.WORD,
             relief="flat", borderwidth=0, padx=12, pady=12,
             state=tk.DISABLED)
@@ -1177,9 +1197,9 @@ class FixBugValidatorApp:
 
 
 def main():
-    _force_light_appearance()
+    is_dark = _detect_appearance()
     root = tk.Tk()
-    FixBugValidatorApp(root)
+    FixBugValidatorApp(root, is_dark)
     # macOS: 强制窗口置顶并获取焦点
     root.lift()
     root.attributes('-topmost', True)
