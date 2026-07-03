@@ -961,6 +961,9 @@ class FixBugValidatorApp:
         self.progress = ttk.Progressbar(self.root, mode="determinate")
         self.progress.pack(fill=tk.X, padx=20, pady=(8, 20), side=tk.BOTTOM)
 
+        # 启动后自动检测设备（延迟 300ms 等窗口渲染完毕）
+        self.root.after(300, self._auto_detect_device)
+
     def _check_bridge_files(self):
         """检测 fix_bug 产物是否存在"""
         brief = FixBugBridge.load_defect_brief()
@@ -1015,46 +1018,66 @@ class FixBugValidatorApp:
         self.root.update_idletasks()
 
     def _auto_detect_device(self):
-        """自动检测设备：依次尝试 hdc → adb → idevice_id"""
+        """自动检测设备：依次尝试 hdc → adb → idevice_id（实时日志反馈）"""
         self.auto_device_btn.configure(text="⏳ 检测中...", state=tk.DISABLED)
         self.device_status_label.configure(
             text="  检测中...", fg=self.colors["text_secondary"])
+        self.status_indicator.configure(text="● 检测设备中", fg="#FFD666")
         self.root.update()
 
         def do_detect():
+            self._log_ui("═══════════════════════════════", "info")
+            self._log_ui("🔍 开始自动检测设备...", "phase")
             tools = [
-                ("hdc list targets", "hdc -t {d} shell", "hdc", self._parse_hdc_devices),
-                ("adb devices", "adb -s {d} shell", "adb", self._parse_adb_devices),
-                ("idevice_id -l", "idevicesyslog", "idevice_id", self._parse_idevice_devices),
+                ("hdc list targets", "hdc -t {d} shell echo alive", "hdc",
+                 self._parse_hdc_devices, "HarmonyOS"),
+                ("adb devices", "adb -s {d} shell echo alive", "adb",
+                 self._parse_adb_devices, "Android"),
+                ("idevice_id -l", None, "idevice_id",
+                 self._parse_idevice_devices, "iOS"),
             ]
-            for detect_cmd, test_cmd, tool_name, parser in tools:
+            for detect_cmd, test_cmd, tool_name, parser, plat_name in tools:
+                self._log_ui(f"  ⏳ 尝试 {tool_name}...", "info")
                 try:
                     r = subprocess.run(detect_cmd.split(), capture_output=True,
                                        text=True, timeout=5)
                     if r.returncode != 0:
+                        self._log_ui(f"    ✗ {tool_name} 未安装或不可用", "warn")
                         continue
+                    self._log_ui(f"    ✓ {tool_name} 已就绪", "info")
                     devices = parser(r.stdout)
                     if not devices:
+                        self._log_ui(f"    ✗ 无在线设备", "warn")
                         continue
                     serial = devices[0]
-                    tested = subprocess.run(
-                        test_cmd.format(d=serial).split() + ["echo", "ok"],
-                        capture_output=True, text=True, timeout=5)
-                    if tested.returncode != 0:
-                        continue
-                    # 成功！根据工具名推断类型
+                    self._log_ui(f"    📱 发现设备: {serial}", "info")
+                    if test_cmd:
+                        tested = subprocess.run(
+                            test_cmd.format(d=serial).split(),
+                            capture_output=True, text=True, timeout=5)
+                        if tested.returncode != 0:
+                            self._log_ui(f"    ✗ 设备 {serial} 无响应", "warn")
+                            continue
+                        self._log_ui(f"    ✓ 设备 {serial} 响应正常", "pass")
                     type_map = {"hdc": ClientType.HARMONY, "adb": ClientType.ANDROID,
                                 "idevice_id": ClientType.IOS}
                     ct = type_map.get(tool_name, ClientType.HARMONY)
                     self._detected_serial = serial
                     self._detected_client_type = ct
+                    self._log_ui(f"  ✅ 检测成功！{plat_name} 真机 ({serial})", "pass")
                     self.root.after(0, lambda s=serial, c=ct: self._on_device_detected(s, c))
                     return
-                except Exception:
+                except Exception as e:
+                    self._log_ui(f"    ✗ {tool_name} 异常: {e}", "warn")
                     continue
+            self._log_ui("  ⚠ 所有方式均未检测到设备", "warn")
             self.root.after(0, self._on_device_not_detected)
 
         threading.Thread(target=do_detect, daemon=True).start()
+
+    def _log_ui(self, msg, level="info"):
+        """从后台线程安全地写日志到面板"""
+        self.root.after(0, lambda: self._log(msg, level))
 
     def _parse_hdc_devices(self, stdout):
         """解析 hdc list targets 输出"""
