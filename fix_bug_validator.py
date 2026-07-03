@@ -818,7 +818,7 @@ class FixBugValidatorApp:
         left_panel = tk.Frame(main, bg=self.colors["bg"])
         left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # ===== 输入卡片（纯 Frame，不用 LabelFrame，标题用普通 Label）=====
+        # ===== 输入卡片 =====
         input_card = tk.Frame(left_panel, bg=self.colors["card"],
                               highlightbackground=self.colors["border"],
                               highlightthickness=1, bd=0)
@@ -830,55 +830,34 @@ class FixBugValidatorApp:
                  font=("SF Pro Display", 13, "bold"),
                  anchor="w").pack(fill=tk.X, padx=12, pady=(12, 6))
 
-        # 序列号 Label
-        tk.Label(input_card, text="序列号 / 设备 ID:",
-                 bg=self.colors["card"], fg=self.colors["text"],
-                 font=("SF Pro Display", 11),
-                 anchor="w").pack(fill=tk.X, padx=16, pady=(6, 2))
+        # 自动检测设备按钮 + 状态
+        self.auto_device_btn = tk.Button(
+            input_card, text="📱 自动检测设备", command=self._auto_detect_device,
+            font=("SF Pro Display", 12, "bold"),
+            bg=self.colors["primary"], fg="white",
+            bd=0, relief="flat", cursor="hand2",
+            padx=20, pady=10, activebackground="#0958D9")
+        self.auto_device_btn.pack(fill=tk.X, padx=16, pady=(8, 4))
 
-        # 序列号 Entry - 独立 Frame 强制高度
-        entry_wrap = tk.Frame(input_card, bg=self.colors["input_bg"],
-                              highlightbackground=self.colors["border"],
-                              highlightthickness=1, bd=0)
-        entry_wrap.pack(fill=tk.X, padx=16, pady=(0, 8), ipady=4)
-        self.serial_entry = tk.Entry(
-            entry_wrap, font=("SF Mono", 14), relief="flat", borderwidth=0,
-            highlightthickness=0, bg=self.colors["input_bg"], fg=self.colors["text"],
-        )
-        self.serial_entry.pack(fill=tk.X, padx=8, pady=8)
-        self.serial_entry.insert(0, "e.g., 20240615A001")
+        # 检测结果显示
+        self.device_status_label = tk.Label(
+            input_card, text="  序列号: ---    机型: ---",
+            bg=self.colors["card"], fg=self.colors["text_secondary"],
+            font=("SF Mono", 12), anchor="w", justify="left")
+        self.device_status_label.pack(fill=tk.X, padx=16, pady=(0, 4))
 
-        # 客户端类型 Label
-        tk.Label(input_card, text="客户端类型:",
-                 bg=self.colors["card"], fg=self.colors["text"],
-                 font=("SF Pro Display", 11),
-                 anchor="w").pack(fill=tk.X, padx=16, pady=(8, 2))
+        self._detected_serial = ""
+        self._detected_client_type = None
 
-        # 客户端类型 Radiobutton
-        type_frame = tk.Frame(input_card, bg=self.colors["card"])
-        type_frame.pack(fill=tk.X, padx=16, pady=(0, 8), ipady=4)
-        self.client_var = tk.StringVar(value="HarmonyOS")
-        for ct in ClientType:
-            rb = tk.Radiobutton(type_frame, text=ct.value, variable=self.client_var,
-                               value=ct.value, bg=self.colors["card"],
-                               fg=self.colors["text"],
-                               font=("SF Pro Display", 12),
-                               selectcolor="#FFFFFF",
-                               activebackground=self.colors["card"],
-                               cursor="hand2", padx=8, pady=4)
-            rb.pack(side="left", padx=(0, 12))
-
-        # 自动探测进程 - 标题
+        # 自动探测进程按钮 + 状态
         tk.Label(input_card, text="目标进程探测:",
                  bg=self.colors["card"], fg=self.colors["text"],
                  font=("SF Pro Display", 11),
                  anchor="w").pack(fill=tk.X, padx=16, pady=(8, 2))
-
-        # 自动探测按钮 + 状态
         self.detect_frame = tk.Frame(input_card, bg=self.colors["card"])
         self.detect_frame.pack(fill=tk.X, padx=16, pady=(0, 8), ipady=4)
         self.detect_btn = tk.Button(
-            self.detect_frame, text="📱 自动探测 App 进程",
+            self.detect_frame, text="📱 自动探测 App 进程（先点检测设备）",
             command=self._auto_detect_process,
             font=("SF Pro Display", 12, "bold"),
             bg=self.colors["success"], fg="white",
@@ -1035,13 +1014,96 @@ class FixBugValidatorApp:
         self.log_text.see(tk.END)
         self.root.update_idletasks()
 
+    def _auto_detect_device(self):
+        """自动检测设备：依次尝试 hdc → adb → idevice_id"""
+        self.auto_device_btn.configure(text="⏳ 检测中...", state=tk.DISABLED)
+        self.device_status_label.configure(
+            text="  检测中...", fg=self.colors["text_secondary"])
+        self.root.update()
+
+        def do_detect():
+            tools = [
+                ("hdc list targets", "hdc -t {d} shell", "hdc", self._parse_hdc_devices),
+                ("adb devices", "adb -s {d} shell", "adb", self._parse_adb_devices),
+                ("idevice_id -l", "idevicesyslog", "idevice_id", self._parse_idevice_devices),
+            ]
+            for detect_cmd, test_cmd, tool_name, parser in tools:
+                try:
+                    r = subprocess.run(detect_cmd.split(), capture_output=True,
+                                       text=True, timeout=5)
+                    if r.returncode != 0:
+                        continue
+                    devices = parser(r.stdout)
+                    if not devices:
+                        continue
+                    serial = devices[0]
+                    tested = subprocess.run(
+                        test_cmd.format(d=serial).split() + ["echo", "ok"],
+                        capture_output=True, text=True, timeout=5)
+                    if tested.returncode != 0:
+                        continue
+                    # 成功！根据工具名推断类型
+                    type_map = {"hdc": ClientType.HARMONY, "adb": ClientType.ANDROID,
+                                "idevice_id": ClientType.IOS}
+                    ct = type_map.get(tool_name, ClientType.HARMONY)
+                    self._detected_serial = serial
+                    self._detected_client_type = ct
+                    self.root.after(0, lambda s=serial, c=ct: self._on_device_detected(s, c))
+                    return
+                except Exception:
+                    continue
+            self.root.after(0, self._on_device_not_detected)
+
+        threading.Thread(target=do_detect, daemon=True).start()
+
+    def _parse_hdc_devices(self, stdout):
+        """解析 hdc list targets 输出"""
+        devices = []
+        for line in stdout.splitlines():
+            line = line.strip()
+            if line and "Empty" not in line:
+                devices.append(line)
+        return devices
+
+    def _parse_adb_devices(self, stdout):
+        """解析 adb devices 输出"""
+        devices = []
+        for line in stdout.splitlines():
+            line = line.strip()
+            if line and not line.startswith("List") and "	device" in line:
+                devices.append(line.split("	")[0])
+        return devices
+
+    def _parse_idevice_devices(self, stdout):
+        """解析 idevice_id -l 输出"""
+        return [l.strip() for l in stdout.splitlines() if l.strip()]
+
+    def _on_device_detected(self, serial, client_type):
+        self.auto_device_btn.configure(
+            text="🔄 重新检测设备", state=tk.NORMAL,
+            bg=self.colors["success"])
+        self.device_status_label.configure(
+            text=f"  序列号: {serial}    机型: {client_type.value}",
+            fg=self.colors["success"])
+        self._log(f"✓ 设备检测成功: {serial} ({client_type.value})", "pass")
+
+    def _on_device_not_detected(self):
+        self.auto_device_btn.configure(
+            text="🔄 重试检测", state=tk.NORMAL,
+            bg=self.colors["warning"], fg="white")
+        self.device_status_label.configure(
+            text="  ⚠ 未检测到设备（模拟器模式可用）",
+            fg=self.colors["warning"])
+        self._detected_serial = "simulator"
+        self._detected_client_type = ClientType.HARMONY
+        self._log("未检测到设备，将使用模拟器模式", "warn")
+
     def _auto_detect_process(self):
         """弹出提示让用户手动启动 App，自动探测进程名"""
-        serial = self.serial_entry.get().strip()
-        client_str = self.client_var.get()
-        client_type = ClientType(client_str) if client_str in [c.value for c in ClientType] else None
+        serial = self._detected_serial
+        client_type = self._detected_client_type
         if not serial or not client_type:
-            messagebox.showwarning("输入不完整", "请先输入序列号并选择客户端类型")
+            messagebox.showwarning("请先检测设备", "请先点击「自动检测设备」")
             return
 
         self.detect_btn.configure(text="⏳ 探测中...", state=tk.DISABLED)
@@ -1089,11 +1151,10 @@ class FixBugValidatorApp:
     def _start_validation(self):
         if self.validation_running:
             return
-        serial = self.serial_entry.get().strip()
-        client_str = self.client_var.get()
-        client_type = ClientType(client_str) if client_str in [c.value for c in ClientType] else None
+        serial = self._detected_serial
+        client_type = self._detected_client_type
         if not serial or not client_type:
-            messagebox.showwarning("输入不完整", "请输入序列号并选择客户端类型")
+            messagebox.showwarning("请先检测设备", "请先点击「自动检测设备」")
             return
 
         self._clear_ui()
@@ -1182,8 +1243,8 @@ class FixBugValidatorApp:
         report = {
             "title": "fix_bug 链路验证报告（含真机校验）",
             "generated_at": datetime.now().isoformat(),
-            "serial": self.serial_entry.get().strip(),
-            "client_type": self.client_var.get(),
+            "serial": self._detected_serial or "",
+            "client_type": self._detected_client_type.value if self._detected_client_type else "",
             "results": self.current_results,
             "test_code": TestGenerator.generate_all(),
         }
