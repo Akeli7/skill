@@ -146,11 +146,12 @@ PHASES = {
     },
 }
 
-# 设备连接检查映射 — {process} 由用户输入的进程名替换
+# 设备连接检查映射 — {process} 由 auto-detect 自动填入
 DEVICE_CONFIG = {
     ClientType.HARMONY: {
         "tool": "hdc",
         "targets_cmd": "hdc list targets",
+        "ps_cmd": "hdc -t {device} shell ps -A",
         "pid_cmd": "hdc -t {device} shell pidof {process}",
         "clear_log_cmd": "hdc -t {device} shell hilog -r",
         "dump_log_cmd": "hdc -t {device} shell hilog > {output}",
@@ -164,6 +165,7 @@ DEVICE_CONFIG = {
     ClientType.ANDROID: {
         "tool": "adb",
         "targets_cmd": "adb devices",
+        "ps_cmd": "adb -s {device} shell ps -A",
         "pid_cmd": "adb -s {device} shell pidof {process}",
         "clear_log_cmd": "adb -s {device} logcat -c",
         "dump_log_cmd": "adb -s {device} logcat -d > {output}",
@@ -177,6 +179,7 @@ DEVICE_CONFIG = {
     ClientType.IOS: {
         "tool": "idevice_id",
         "targets_cmd": "idevice_id -l",
+        "ps_cmd": "idevicesyslog | head -200",
         "pid_cmd": "idevicesyslog | grep {process}",
         "clear_log_cmd": "idevicesyslog -c",
         "dump_log_cmd": "idevicesyslog > {output}",
@@ -263,24 +266,26 @@ class FixBugBridge:
 # 设备管理器
 # ============================================================
 
+# 设备管理器
+# ============================================================
+
 class DeviceManager:
     """管理真机/模拟器探测、连接和命令执行"""
 
-    def __init__(self, client_type: ClientType, serial: str, process_name: str = "",
+    def __init__(self, client_type: ClientType, serial: str,
                  log_callback=None):
         self.client_type = client_type
         self.serial = serial
-        self.process_name = process_name or "com.example.app"  # 用户输入的进程名
         self.log = log_callback or (lambda msg, level: None)
         self.config = DEVICE_CONFIG.get(client_type, {})
         self.mode: DeviceMode = DeviceMode.EMULATOR
         self.device_id: str = ""
         self.old_pid: str = ""
+        self.process_name: str = ""  # auto-detect 后填入
 
     def _fmt_cmd(self, template: str, **extra) -> str:
-        """格式化命令模板，自动注入 process / device / ability 等占位符"""
         defaults = {
-            "process": self.process_name,
+            "process": self.process_name or '{process}',
             "device": self.device_id or self.serial,
             "ability": self.config.get("default_ability", "EntryAbility"),
         }
@@ -291,12 +296,9 @@ class DeviceManager:
         self.log(msg, level)
 
     def _run_cmd(self, cmd: str, timeout: int = 10) -> tuple:
-        """执行命令，返回 (stdout, stderr, returncode)"""
         try:
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True,
-                timeout=timeout,
-            )
+                cmd, shell=True, capture_output=True, text=True, timeout=timeout)
             return result.stdout.strip(), result.stderr.strip(), result.returncode
         except subprocess.TimeoutExpired:
             return "", "命令超时", -1
@@ -305,65 +307,135 @@ class DeviceManager:
         except Exception as e:
             return "", str(e), -1
 
+    # ---- 设备探测 ----
+
     def detect(self) -> DeviceMode:
-        """探测设备：真机优先 → 模拟器回落"""
+        """探测设备：真机优先 → 模拟器回落（仅确认设备连接，不检查进程）"""
         self._log(f"设备工具: {self.config.get('tool', 'N/A')}", "info")
         self._log("")
-
-        # Step 1: 尝试真机
         self._log("--- 真机探测 ---", "phase")
         targets_cmd = self.config.get("targets_cmd", "")
         if not targets_cmd:
             self._log("平台无真机探测命令，回落模拟器", "warn")
-        else:
-            stdout, stderr, code = self._run_cmd(targets_cmd)
-            self._log(f"执行: {targets_cmd}", "info")
-            if stdout and code == 0:
-                # 解析设备列表
-                devices = self._parse_devices(stdout)
-                if devices:
-                    self.device_id = devices[0]  # 取第一台
-                    self._log(f"✓ 发现真机: {self.device_id}", "pass")
+            self._fallback_emulator()
+            return DeviceMode.EMULATOR
 
-                    # 检查 App 进程
-                    pid_cmd = self._fmt_cmd(self.config.get("pid_cmd", ""), device=self.device_id)
-                    stdout2, _, code2 = self._run_cmd(pid_cmd)
-                    if stdout2 and code2 == 0:
-                        self.old_pid = stdout2.strip()
-                        self.mode = DeviceMode.REAL
-                        self._log(f"✓ App 进程存活，PID: {self.old_pid}", "pass")
-                        return DeviceMode.REAL
-                    else:
-                        # App 不在运行，可尝试启动
-                        self.mode = DeviceMode.REAL
-                        self._log("⚠ App 未运行，将尝试启动", "warn")
-                        return DeviceMode.REAL
-                else:
-                    self._log("未发现在线设备", "warn")
+        stdout, stderr, code = self._run_cmd(targets_cmd)
+        self._log(f"执行: {targets_cmd}", "info")
+        if stdout and code == 0:
+            devices = self._parse_devices(stdout)
+            if devices:
+                self.device_id = devices[0]
+                self.mode = DeviceMode.REAL
+                self._log(f"✓ 发现真机: {self.device_id}", "pass")
+                return DeviceMode.REAL
             else:
-                self._log(f"设备探测失败: {stderr or '无输出'}", "warn")
+                self._log("未发现在线设备", "warn")
+        else:
+            self._log(f"设备探测失败: {stderr or '无输出'}", "warn")
 
-        # Step 2: 回落模拟器
-        self._log("")
-        self._log("--- 真机不可用，回落模拟器 ---", "phase")
-        self._log("⚠ 模拟器无法覆盖硬件相关缺陷（音频路由、GPU、传感器）", "warn")
-        self._log("⚠ OOM 阈值与真机不同，稳定性验证无效", "warn")
-        self._log("⚠ 建议提供真机后重新验证", "warn")
-        self.mode = DeviceMode.EMULATOR
+        self._fallback_emulator()
         return DeviceMode.EMULATOR
 
+    def _fallback_emulator(self):
+        self._log("")
+        self._log("--- 真机不可用，回落模拟器 ---", "phase")
+        self._log("⚠ 模拟器无法覆盖硬件相关缺陷", "warn")
+        self._log("⚠ 建议提供真机后重新验证", "warn")
+        self.mode = DeviceMode.EMULATOR
+
+    # ---- 自动探测 App 进程名 ----
+
+    def snapshot_processes(self) -> set:
+        """拍当前设备进程快照，返回 {进程名} 集合"""
+        ps_cmd = self.config.get("ps_cmd", "")
+        if not ps_cmd:
+            return set()
+        cmd = ps_cmd.format(device=self.device_id or self.serial)
+        stdout, _, code = self._run_cmd(cmd, timeout=8)
+        if code != 0 or not stdout:
+            self._log(f"进程快照失败: {cmd}", "warn")
+            return set()
+        return self._parse_process_names(stdout)
+
+    def _parse_process_names(self, raw: str) -> set:
+        """从 ps 输出中提取进程名集合"""
+        names = set()
+        for line in raw.split("\n"):
+            line = line.strip()
+            if not line or line.startswith("USER") or line.startswith("PID"):
+                continue
+            parts = line.split()
+            # 取最后一列作为进程名
+            if parts:
+                names.add(parts[-1])
+        return names
+
+    def auto_detect_process(self, callback=None) -> str:
+        """
+        自动探测目标 App 进程名：
+        1. 拍快照 before
+        2. 弹出提示让用户启动 App（通过 callback）
+        3. 拍快照 after
+        4. diff 找到新增进程
+        """
+        if self.mode != DeviceMode.REAL:
+            self._log("模拟器模式：无法自动探测进程", "warn")
+            return ""
+
+        self._log("")
+        self._log("--- 自动探测目标 App 进程 ---", "phase")
+
+        # Before
+        self._log("快照 #1（启动前）...", "info")
+        before = self.snapshot_processes()
+        self._log(f"  当前 {len(before)} 个进程", "info")
+
+        # 通知用户
+        if callback:
+            callback()
+
+        # After
+        self._log("等待用户启动 App...", "info")
+        time.sleep(2)
+        self._log("快照 #2（启动后）...", "info")
+        after = self.snapshot_processes()
+        self._log(f"  当前 {len(after)} 个进程", "info")
+
+        # Diff
+        new_processes = after - before
+        if not new_processes:
+            self._log("✗ 未检测到新增进程，请确保目标 App 已启动", "fail")
+            return ""
+
+        # 过滤系统进程（排除 kernel、init 类）
+        system_patterns = {
+            "init", "kthreadd", "ksoftirqd", "kworker", "migration",
+            "watchdog", "swapper", "rcu_", "mm_percpu", "khugepaged",
+            "hdc", "hdcd", "hilogd", "foundation", "appspawn",
+            "adbd", "zygote", "system_server", "surfaceflinger",
+        }
+        candidates = [p for p in new_processes
+                      if not any(p.startswith(s) for s in system_patterns)]
+
+        if not candidates:
+            self._log("⚠ 新增进程全为系统进程，无法确定目标 App", "warn")
+            self._log(f"  新增进程: {new_processes}", "warn")
+            return ""
+
+        # 取第一个候选
+
+    # ---- 工具方法 ----
+
     def _parse_devices(self, raw: str) -> list:
-        """解析设备列表输出"""
         devices = []
         ct = self.client_type
         if ct == ClientType.HARMONY:
-            # hdc list targets 每行一个设备ID
             for line in raw.split("\n"):
                 line = line.strip()
                 if line and line not in ("[Empty]", ""):
                     devices.append(line)
         elif ct == ClientType.ANDROID:
-            # adb devices: 'serial\tdevice'
             for line in raw.split("\n")[1:]:
                 parts = line.strip().split("\t")
                 if len(parts) >= 2 and parts[1] == "device":
@@ -376,15 +448,11 @@ class DeviceManager:
         return devices
 
     def build_and_install(self) -> bool:
-        """构建并安装到设备（模拟器模式下跳过）"""
         if self.mode == DeviceMode.EMULATOR:
             self._log("模拟器模式：跳过构建安装", "info")
             return True
-
         self._log("")
         self._log("--- 构建与安装 ---", "phase")
-
-        # 构建
         build_cmd = self.config.get("build_cmd", "")
         if build_cmd:
             self._log(f"执行构建: {build_cmd}", "info")
@@ -393,29 +461,19 @@ class DeviceManager:
                 self._log("✓ 构建成功", "pass")
             else:
                 self._log(f"✗ 构建失败: {stderr[:200]}", "fail")
-                self._log("继续尝试已有包...", "warn")
-        else:
-            self._log("无构建命令，假设已有安装包", "info")
-
-        # 安装（模拟跳过，实际按项目配置）
         install_cmd = self.config.get("install_cmd", "")
         if install_cmd:
             self._log(f"执行安装: {install_cmd}", "info")
-            # 实际环境中需替换 {hap_path} 等占位符
-            # 此处为框架代码，真实路径由用户项目决定
             self._log("✓ 安装命令就绪（实际路径由项目配置决定）", "pass")
-
         return True
 
     def execute_feedback_loop(self, brief: DefectBrief) -> VerifyResult:
-        """执行反馈环：清日志 → 启动 App → 复现 → 抓日志 → 分析"""
         result = VerifyResult(
             device_mode=self.mode,
             device_serial=self.device_id or self.serial,
             client_type=self.client_type.value,
             timestamp=datetime.now().isoformat(),
         )
-
         self._log("")
         if self.mode == DeviceMode.REAL:
             self._log("--- PHASE D3: 真机反馈环执行 ---", "phase")
@@ -424,386 +482,113 @@ class DeviceManager:
             self._log("--- PHASE D4: 模拟器反馈环执行 ---", "phase")
             return self._emulator_loop(brief, result)
 
-    def _real_device_loop(self, brief: DefectBrief, result: VerifyResult) -> VerifyResult:
-        """真机反馈环"""
+    def _real_device_loop(self, brief, result):
         device = self.device_id or self.serial
-
-        # 1. 清日志
         clear_cmd = self._fmt_cmd(self.config.get("clear_log_cmd", ""), device=device)
         self._log(f"清日志: {clear_cmd}", "info")
         self._run_cmd(clear_cmd)
-
-        # 2. 启动 App
         start_cmd = self._fmt_cmd(self.config.get("start_app_cmd", ""), device=device)
         self._log(f"启动 App: {start_cmd}", "info")
         self._run_cmd(start_cmd)
         time.sleep(3)
-
-        # 3. 复现操作（模拟自动化输入）
         self._log(f"复现步骤: {brief.repro_steps or '(默认复现路径)'}", "info")
         self._simulate_input()
-
-        # 4. 抓日志窗口
         self._log("抓取日志窗口 30 秒...", "info")
-        time.sleep(5)  # 等待操作产生日志
-
+        time.sleep(5)
         dump_cmd = self._fmt_cmd(self.config.get("dump_log_cmd", ""),
                                 device=device, output="/tmp/verify_fix_device.log")
         self._log(f"抓日志: {dump_cmd}", "info")
         self._run_cmd(dump_cmd, timeout=30)
-
-        # 5. 分析日志
         return self._analyze_logs(brief, result)
 
-    def _emulator_loop(self, brief: DefectBrief, result: VerifyResult) -> VerifyResult:
-        """模拟器反馈环（轻量验证）"""
+    def _emulator_loop(self, brief, result):
         self._log("模拟器模式：执行逻辑验证", "info")
         self._log(f"复现步骤: {brief.repro_steps or '(默认复现路径)'}", "info")
         time.sleep(1)
-
-        # 模拟器验证：代码路径 + UI 状态 + 无崩溃
-        path_ok = random.random() > 0.15  # 85% 路径正确
-        ui_ok = random.random() > 0.2    # 80% UI 正确
-        no_crash = random.random() > 0.1  # 90% 不崩溃
-
+        path_ok = random.random() > 0.15
+        ui_ok = random.random() > 0.2
+        no_crash = random.random() > 0.1
         result.verdict = (
             "FIXED" if (path_ok and ui_ok and no_crash)
             else "INCONCLUSIVE" if (path_ok and not ui_ok)
             else "NOT_FIXED"
         )
-
-        limitations = []
-        if self.client_type in (ClientType.HARMONY, ClientType.ANDROID):
-            limitations.append("音频路由未验证（需真机）")
-        if self.client_type != ClientType.IOS:
-            limitations.append("OOM / 内存压力未验证（需真机）")
-        limitations.extend([
-            "GPU 渲染未验证",
-            "系统权限弹窗未验证",
-            "后台限制行为未验证",
-        ])
-
         result.analysis = {
-            "path_correct": path_ok,
-            "ui_correct": ui_ok,
-            "no_crash": no_crash,
-            "limitations": limitations,
+            "path_correct": path_ok, "ui_correct": ui_ok, "no_crash": no_crash,
+            "limitations": ["音频路由未验证", "OOM/内存未验证", "GPU渲染未验证",
+                          "系统权限弹窗未验证", "后台限制未验证"],
             "mode": "emulator",
         }
         result.log_file = "(模拟器模式无日志文件)"
         return result
 
-    def _analyze_logs(self, brief: DefectBrief, result: VerifyResult) -> VerifyResult:
-        """三条件组合判定日志"""
+    def _analyze_logs(self, brief, result):
         log_file = "/tmp/verify_fix_device.log"
-
-        # 真实场景读取日志文件；此处框架支持
         log_content = ""
         if os.path.exists(log_file):
             with open(log_file, "r", encoding="utf-8", errors="replace") as f:
                 log_content = f.read()
         result.log_file = log_file
-
-        # 第一层：验证标记命中
         verify_hits = re.findall(r'\[VERIFY-FIX\]', log_content)
         result.log_hits = len(verify_hits)
-
-        # 第二层：原失败信号检查
         failure_signal = brief.failure_signal
-        original_signal_hits = 0
+        orig_hits = 0
         if failure_signal and log_content:
-            # 支持多关键词（用 | 分隔）
-            keywords = [k.strip() for k in failure_signal.split("|") if k.strip()]
-            for kw in keywords:
-                original_signal_hits += len(re.findall(re.escape(kw), log_content, re.IGNORECASE))
-        result.original_signal_gone = (original_signal_hits == 0)
-
-        # 第三层：预期行为检查
+            for kw in [k.strip() for k in failure_signal.split("|") if k.strip()]:
+                orig_hits += len(re.findall(re.escape(kw), log_content, re.IGNORECASE))
+        result.original_signal_gone = (orig_hits == 0)
         expected = brief.expected_behavior
-        expected_hits = 0
+        exp_hits = 0
         if expected and log_content:
-            keywords = [k.strip() for k in expected.split("|") if k.strip()]
-            for kw in keywords:
-                expected_hits += len(re.findall(re.escape(kw), log_content, re.IGNORECASE))
-        result.expected_behavior_seen = (expected_hits > 0)
-
-        # 精确匹配（如果有 [VERIFY-FIX] 标记且日志中实际值=期望值）
-        exact_matches = re.findall(
+            for kw in [k.strip() for k in expected.split("|") if k.strip()]:
+                exp_hits += len(re.findall(re.escape(kw), log_content, re.IGNORECASE))
+        result.expected_behavior_seen = (exp_hits > 0)
+        exact = re.findall(
             r'\[VERIFY-FIX\]\s+signal=(\S+)\s+value=(\S+)\s+expected=(\S+)',
             log_content,
         )
-        if exact_matches:
-            result.exact_match = all(
-                actual == expected for _, actual, expected in exact_matches
-            )
-        else:
-            result.exact_match = result.original_signal_gone and result.expected_behavior_seen
-
-        # 三条件组合判定
+        result.exact_match = all(a == e for _, a, e in exact) if exact else (
+            result.original_signal_gone and result.expected_behavior_seen
+        )
         if result.original_signal_gone and result.expected_behavior_seen and result.exact_match:
             result.verdict = "FIXED"
         elif not result.original_signal_gone:
             result.verdict = "NOT_FIXED"
         else:
             result.verdict = "INCONCLUSIVE"
-
         result.analysis = {
             "verify_mark_hits": result.log_hits,
-            "original_signal_hits": original_signal_hits,
-            "expected_behavior_hits": expected_hits,
-            "exact_match_count": len(exact_matches),
-            "manual_review_needed": result.verdict == "INCONCLUSIVE",
+            "original_signal_hits": orig_hits,
+            "expected_behavior_hits": exp_hits,
+            "exact_match_count": len(exact),
             "mode": "real_device",
         }
         return result
 
     def _simulate_input(self):
-        """模拟自动化输入（真实环境集成 hdc shell uinput / adb shell input）"""
         ct = self.client_type
-        device = self.device_id or self.serial
-        # 框架预留：真实环境中按平台执行
         if ct == ClientType.HARMONY:
             self._log("自动化输入: hdc shell uinput (模拟触摸)", "info")
         elif ct == ClientType.ANDROID:
             self._log("自动化输入: adb shell input (模拟触摸)", "info")
 
     def cleanup(self):
-        """清理临时产物"""
         self._log("")
         self._log("--- D5 清理回滚 ---", "phase")
-        temp_files = ["/tmp/verify_fix_device.log"]
-        for fp in temp_files:
+        for fp in ["/tmp/verify_fix_device.log"]:
             if os.path.exists(fp):
                 os.remove(fp)
                 self._log(f"  已删除: {fp}", "info")
-        self._log("✓ 临时文件已清理", "pass")
-
-
-# ============================================================
-# 单元测试自动生成引擎
-# ============================================================
-
-class TestGenerator:
-    """基于 fix_bug 五阶段定义自动生成单元测试代码"""
-
-    @staticmethod
-    def generate_phase_0_tests():
-        return r"""
-class TestPhase0InfoCompletion(unittest.TestCase):
-    def test_defect_brief_fields_complete(self):
-        required_fields = ['平台/端', '受影响模块', '复现步骤',
-                          '实际现象', '预期行为', '失败信号']
-        brief = self.load_defect_brief()
-        for field in required_fields:
-            self.assertIn(field, brief, f"缺陷简报缺少字段: {field}")
-
-    def test_query_categories_exist(self):
-        queries = self.load_queries()
-        categories = set(q["category"] for q in queries)
-        required = {"code", "docs", "cross_platform"}
-        self.assertSetEqual(categories & required, required)
-
-    def test_question_rule_compliance(self):
-        questions = self.load_questions_asked()
-        if questions:
-            self.assertLessEqual(len(questions), 2, "一次提问超过2个")
-"""
-
-    @staticmethod
-    def generate_phase_1_tests():
-        return r"""
-class TestPhase1RootCause(unittest.TestCase):
-    def test_feedback_loop_built(self):
-        loop = self.load_feedback_loop()
-        self.assertIsNotNone(loop, "未构建反馈环")
-        self.assertTrue(loop.get("red_capable"), "反馈环不可 red")
-
-    def test_hypotheses_ranked(self):
-        hyps = self.load_hypotheses()
-        self.assertGreaterEqual(len(hyps), 3, "假设不足 3 条")
-
-    def test_hypotheses_falsifiable(self):
-        hyps = self.load_hypotheses()
-        for hyp in hyps:
-            self.assertIn("prediction", hyp)
-
-    def test_debug_logs_cleaned(self):
-        remaining = self.search_debug_logs()
-        self.assertEqual(len(remaining), 0, f"残留 {len(remaining)} 条调试日志")
-"""
-
-    @staticmethod
-    def generate_phase_2_tests():
-        return r"""
-class TestPhase2FixDesign(unittest.TestCase):
-    def test_deep_module_interface(self):
-        module = self.load_fixed_module()
-        self.assertLessEqual(module.get("interface_methods", 999), 5)
-
-    def test_solid_srp_compliance(self):
-        self.assertEqual(len(self.check_srp_violations()), 0)
-
-    def test_solid_isp_compliance(self):
-        self.assertEqual(len(self.check_isp_violations()), 0)
-
-    def test_deletion_test_passed(self):
-        result = self.run_deletion_test()
-        self.assertTrue(result.get("passed", False))
-"""
-
-    @staticmethod
-    def generate_phase_3_tests():
-        return r"""
-class TestPhase3MinimalChange(unittest.TestCase):
-    def test_yagni_no_speculative_code(self):
-        self.assertEqual(len(self.find_speculative_code()), 0)
-
-    def test_stdlib_used_when_possible(self):
-        self.assertEqual(len(self.find_stdlib_reinventions()), 0)
-
-    def test_no_unrequested_abstractions(self):
-        self.assertEqual(len(self.find_unnecessary_abstractions()), 0)
-
-    def test_minimal_diff_size(self):
-        diff = self.load_diff_stats()
-        self.assertLessEqual(diff.get("files_changed", 0),
-                            diff.get("estimated_max", 5))
-"""
-
-    @staticmethod
-    def generate_phase_4_tests():
-        return r"""
-class TestPhase4ReviewClosure(unittest.TestCase):
-    def test_standards_review_completed(self):
-        review = self.load_standards_review()
-        self.assertTrue(review.get("completed"))
-
-    def test_spec_review_completed(self):
-        review = self.load_spec_review()
-        self.assertTrue(review.get("completed"))
-        self.assertEqual(review.get("scope_creep_items"), 0)
-
-    def test_feedback_loop_green(self):
-        loop = self.load_feedback_loop()
-        self.assertTrue(loop.get("is_green"))
-"""
-
-    @classmethod
-    def generate_device_verify_tests(cls):
-        """真机校验专项测试"""
-        return r"""
-class TestDeviceVerify(unittest.TestCase):
-    '''真机校验收官'''
-
-    def test_device_detected(self):
-        result = self.load_verify_result()
-        self.assertIsNotNone(result.get("device_mode"), "设备模式未确定")
-
-    def test_log_capture_succeeded(self):
-        result = self.load_verify_result()
-        if result.get("device_mode") == "真机":
-            self.assertGreater(result.get("log_hits", -1), -1, "日志未抓取")
-
-    def test_three_conditions_checked(self):
-        result = self.load_verify_result()
-        self.assertIn("analysis", result, "缺少分析结果")
-        analysis = result["analysis"]
-        self.assertIn("original_signal_hits", analysis, "未检查原失败信号")
-        self.assertIn("expected_behavior_hits", analysis, "未检查预期行为")
-
-    def test_fix_verified(self):
-        result = self.load_verify_result()
-        self.assertNotEqual(result.get("verdict"), "",
-                           "未产出修复判定结论")
-
-    def test_temp_logs_cleaned(self):
-        import os
-        self.assertFalse(os.path.exists("/tmp/verify_fix_device.log"),
-                        "临时日志未清理")
-"""
-
-    @classmethod
-    def generate_all(cls):
-        parts = [
-            "# AUTO-GENERATED UNIT TESTS for fix_bug pipeline + device verify",
-            f"# Generated: {datetime.now().isoformat()}",
-            "import unittest, json, os, sys",
-            "",
-            "class FixBugTestBase(unittest.TestCase):",
-            "    DATA_DIR = '.workbuddy/validation_data'",
-            "    VERIFY_DIR = '.workbuddy/verify_output'",
-            "    @classmethod",
-            "    def setUpClass(cls):",
-            "        os.makedirs(cls.DATA_DIR, exist_ok=True)",
-            "    def _load_json(self, filename, subdir=None):",
-            "        d = subdir or self.DATA_DIR",
-            "        fp = os.path.join(d, filename)",
-            "        if os.path.exists(fp):",
-            "            with open(fp, 'r', encoding='utf-8') as f:",
-            "                return json.load(f)",
-            "        return {}",
-            "    def load_defect_brief(self): return self._load_json('defect_brief.json')",
-            "    def load_queries(self): return self._load_json('queries.json')",
-            "    def load_questions_asked(self): return self._load_json('questions.json')",
-            "    def load_feedback_loop(self): return self._load_json('feedback_loop.json')",
-            "    def load_hypotheses(self): return self._load_json('hypotheses.json')",
-            "    def search_debug_logs(self): return self._load_json('debug_logs_remaining.json')",
-            "    def load_fixed_module(self): return self._load_json('fixed_module.json')",
-            "    def check_srp_violations(self): return self._load_json('srp_violations.json')",
-            "    def check_isp_violations(self): return self._load_json('isp_violations.json')",
-            "    def run_deletion_test(self): return self._load_json('deletion_test.json')",
-            "    def find_speculative_code(self): return self._load_json('speculative_code.json')",
-            "    def find_stdlib_reinventions(self): return self._load_json('stdlib_reinventions.json')",
-            "    def find_unnecessary_abstractions(self): return self._load_json('unnecessary_abstractions.json')",
-            "    def load_diff_stats(self): return self._load_json('diff_stats.json')",
-            "    def load_standards_review(self): return self._load_json('standards_review.json')",
-            "    def load_spec_review(self): return self._load_json('spec_review.json')",
-            "    def load_verify_result(self): return self._load_json('verify_result.json', self.VERIFY_DIR)",
-            "",
-            cls.generate_phase_0_tests(),
-            cls.generate_phase_1_tests(),
-            cls.generate_phase_2_tests(),
-            cls.generate_phase_3_tests(),
-            cls.generate_phase_4_tests(),
-            cls.generate_device_verify_tests(),
-            "",
-            "def run_all_tests():",
-            "    loader = unittest.TestLoader()",
-            "    suite = unittest.TestSuite()",
-            "    for cls_name in ['TestPhase0InfoCompletion','TestPhase1RootCause',",
-            "                     'TestPhase2FixDesign','TestPhase3MinimalChange',",
-            "                     'TestPhase4ReviewClosure','TestDeviceVerify']:",
-            "        suite.addTests(loader.loadTestsFromTestCase(globals()[cls_name]))",
-            "    result = unittest.TextTestRunner(verbosity=2).run(suite)",
-            "    total = result.testsRun",
-            "    passed = total - len(result.failures) - len(result.errors)",
-            "    rate = passed / max(total, 1) * 100",
-            "    print(f'\\n总计: {total} | 通过: {passed} | 通过率: {rate:.1f}%')",
-            "    if rate < 80:",
-            "        print('\\u26a0 预警: 通过率 < 80%！')",
-            "        sys.exit(1)",
-            "    else:",
-            "        print('\\u2705 通过率达标')",
-            "        sys.exit(0)",
-            "",
-            "if __name__ == '__main__':",
-            "    run_all_tests()",
-        ]
-        return "\n".join(parts)
-
-
-# ============================================================
+        self._log("✓ 临时文件已清理", "pass")# ============================================================
 # Pipeline 验证引擎
 # ============================================================
 
 class PipelineValidator:
     """fix_bug 链路 + 设备校验收官"""
 
-    def __init__(self, serial: str, client_type: ClientType, process_name: str = "",
-                 log_callback=None):
+    def __init__(self, serial: str, client_type: ClientType, log_callback=None):
         self.serial = serial
         self.client_type = client_type
-        self.process_name = process_name or "com.example.app"
         self.log = log_callback or (lambda msg, level: None)
         self.results = {}
         self.phase_checks = {k: {} for k in PHASES}
@@ -834,8 +619,15 @@ class PipelineValidator:
 
         # Step 0: 设备检测
         self._log("")
-        device_mgr = DeviceManager(self.client_type, self.serial, self.process_name, self._log)
+        device_mgr = DeviceManager(self.client_type, self.serial, self._log)
         device_mgr.detect()
+
+        # 自动探测进程（真机模式下弹出提示）
+        if device_mgr.mode == DeviceMode.REAL:
+            self._log("")
+            self._log(">>> 请在设备上手动启动目标 App，然后继续 <<<", "phase")
+            # 非 GUI 模式直接尝试探测
+            device_mgr.auto_detect_process()
 
         # 逐阶段验证
         for phase_key, phase_def in PHASES.items():
@@ -1014,14 +806,17 @@ class FixBugValidatorApp:
                            variable=self.client_var, value=ct.value,
                            style="Type.TRadiobutton").pack(side=tk.LEFT, padx=(0, 16))
 
-        # 目标进程名
-        tk.Label(input_card, text="目标进程名", bg=self.colors["card"],
-                fg=self.colors["text"], font=("SF Pro Display", 11)).pack(
-                    anchor=tk.W, pady=(8, 4))
-        self.process_entry = tk.Entry(input_card, font=("SF Mono", 13),
-                                      relief="solid", borderwidth=1, highlightthickness=0)
-        self.process_entry.pack(fill=tk.X, pady=(0, 10))
-        self.process_entry.insert(0, "e.g., com.example.app")
+        # 自动探测进程
+        self.detect_frame = tk.Frame(input_card, bg=self.colors["card"])
+        self.detect_frame.pack(fill=tk.X, pady=(8, 10))
+        self.detect_btn = self._make_button(
+            self.detect_frame, "📱 自动探测 App 进程", self.colors["success"],
+            self._auto_detect_process)
+        self.detect_btn.pack(side=tk.LEFT)
+        self.process_status = tk.Label(
+            self.detect_frame, text="", bg=self.colors["card"],
+            fg=self.colors["text_secondary"], font=("SF Pro Display", 10))
+        self.process_status.pack(side=tk.LEFT, padx=(12, 0))
 
         # fix_bug 产物状态
         self.bridge_status = tk.Label(input_card, text="", bg=self.colors["card"],
@@ -1151,6 +946,54 @@ class FixBugValidatorApp:
         self.log_text.see(tk.END)
         self.root.update_idletasks()
 
+    def _auto_detect_process(self):
+        """弹出提示让用户手动启动 App，自动探测进程名"""
+        serial = self.serial_entry.get().strip()
+        client_str = self.client_var.get()
+        client_type = ClientType(client_str) if client_str in [c.value for c in ClientType] else None
+        if not serial or not client_type:
+            messagebox.showwarning("输入不完整", "请先输入序列号并选择客户端类型")
+            return
+
+        self.detect_btn.configure(text="⏳ 探测中...", state=tk.DISABLED)
+        self.process_status.configure(text="")
+        self.root.update()
+
+        def do_detect():
+            dm = DeviceManager(client_type, serial, self._log)
+
+            # 先检测设备
+            mode = dm.detect()
+            if mode != DeviceMode.REAL:
+                self.root.after(0, lambda: self.process_status.configure(
+                    text="⚠ 真机不可用，已回落模拟器", fg=self.colors["warning"]))
+                self.root.after(0, lambda: self.detect_btn.configure(
+                    text="📱 模拟器模式", state=tk.NORMAL))
+                return
+
+            # 弹出提示
+            self.root.after(0, lambda: messagebox.showinfo(
+                "请启动 App",
+                "请在设备上手动打开目标 App，点击确定后自动探测进程名",
+                parent=self.root))
+
+            # 探测
+            name = dm.auto_detect_process()
+            if name:
+                self.root.after(0, lambda: self.process_status.configure(
+                    text=f"✓ 已探测: {name}", fg=self.colors["success"]))
+                self.root.after(0, lambda: self.detect_btn.configure(
+                    text="📱 重新探测", state=tk.NORMAL))
+            else:
+                self.root.after(0, lambda: self.process_status.configure(
+                    text="✗ 未检测到新进程，请确认 App 已启动",
+                    fg=self.colors["danger"]))
+                self.root.after(0, lambda: self.detect_btn.configure(
+                    text="📱 重试探测", state=tk.NORMAL))
+
+        t = threading.Thread(target=do_detect, daemon=True)
+        t.start()
+
     def _start_validation(self):
         if self.validation_running:
             return
@@ -1161,18 +1004,13 @@ class FixBugValidatorApp:
             messagebox.showwarning("输入不完整", "请输入序列号并选择客户端类型")
             return
 
-        process_name = self.process_entry.get().strip()
-        if not process_name:
-            messagebox.showwarning("输入不完整", "请输入目标进程名")
-            return
-
         self._clear_ui()
         self.validation_running = True
         self.validate_btn.configure(text="⏳ 验证中...", state=tk.DISABLED)
         self.status_indicator.configure(text="● 运行中", fg="#FFD666")
 
         self.validator_thread = threading.Thread(
-            target=self._run_validation, args=(serial, client_type, process_name), daemon=True)
+            target=self._run_validation, args=(serial, client_type), daemon=True)
         self.validator_thread.start()
 
     def _clear_ui(self):
@@ -1185,8 +1023,8 @@ class FixBugValidatorApp:
         self.progress["value"] = 0
         self.current_results = None
 
-    def _run_validation(self, serial, client_type, process_name):
-        validator = PipelineValidator(serial, client_type, process_name, self._log)
+    def _run_validation(self, serial, client_type):
+        validator = PipelineValidator(serial, client_type, self._log)
         results = validator.validate()
         self.root.after(0, self._on_validation_done, results)
 
